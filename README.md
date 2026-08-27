@@ -20,46 +20,51 @@ pip install numpy pandas matplotlib pytest
 ## 快速开始
 
 ```bash
-# 10 日回测 + 消融对比 + 参数扫描
-python scripts/run_backtest.py --contract T --days 10
+# 20 日回测 + 消融对比 + 参数扫描
+python scripts/run_backtest.py --contract T --days 20
 
 # 仅主回测（跳过扫描）
-python scripts/run_backtest.py --contract T --days 10 --no-sweep
+python scripts/run_backtest.py --contract T --days 20 --no-sweep
 
 # 自定义参数
-python scripts/run_backtest.py --contract TF --gamma 0.01 --k 100 --days 10
+python scripts/run_backtest.py --contract TF --gamma 0.01 --k 100 --days 20
 ```
 
 结果保存至 `results/<合约>/`，含：
-- `equity_inventory.png` — 权益曲线 + 库存轨迹
-- `daily_pnl.png` — 逐日盈亏柱状图
-- `quote_window.png` — 报价行为窗口
+- `equity_inventory.png` — 权益曲线（含回撤区域）+ 库存轨迹（含 ±库存上限）
+- `daily_pnl.png` — 逐日盈亏柱状图 + 累计盈亏曲线
+- `day_snapshot.png` — 单日运行快照：中间价与成交标记 / 双边报价宽度与偏移 / 持仓阶梯 / 日内累计盈亏（四面板联动，墙钟横轴）
+- `quote_window.png` — 分钟级微观报价窗口（我方双边报价 vs 市场最优价 + 成交标记）
+- `quote_stats.png` — 微观结构统计：半价差分布 / 库存-偏移响应 / 持仓分布 / 日内盈亏热力图
 - `sweep_pnl.png` / `sweep.csv` — Gamma×k 扫描热力图
 - `*_metrics.json` / `benchmarks.json` — 绩效指标
 - `*_fills.csv` — 逐笔成交记录
+- `*_samples.csv` — 10 秒粒度采样序列（双边报价、持仓、日内/累计盈亏，供外部细查）
 
-## 回测绩效（T 主力，10 日，seed=7）
+控制台同时输出逐日明细（盈亏 / 买卖成交结构 / 费用 / 期末与峰值库存）、双边报价摘录与成交明细摘录（含成交渠道与价格偏离）。
+
+## 回测绩效（T 主力，20 日，seed=7）
 
 | 指标 | 数值 |
 |---|---|
-| 总盈亏 | +514,844 元（日均 +51,484） |
-| 毛利 / 手续费 | +689,500 / 174,656 元 |
-| 年化 Sharpe | 122.9 |
-| 最大回撤 | 4,309 元 |
-| 成交笔数 | 17,522（全部做市成交） |
-| 回合毛价差 | 1.57 tick（净利 59 元/手） |
+| 总盈亏 | +1,047,070 元（日均 +52,354） |
+| 毛利 / 手续费 | +1,400,800 / 353,730 元 |
+| 年化 Sharpe | 112.8 |
+| 最大回撤 | 11,270 元 |
+| 成交笔数 | 35,222（全部做市成交） |
+| 回合毛价差 | 1.59 tick（净利 59 元/手） |
 | 平均库存 | 0.7 手（峰值 7 手） |
-| Markout | 1s +0.80、30s +0.74、120s +0.74 tick |
+| Markout | 1s +0.80、30s +0.76、120s +0.76 tick |
 
 ### 消融对比（同市场路径）
 
 | 模式 | 总盈亏 | Sharpe | 回撤 | 均库存 |
 |---|---|---|---|---|
-| **AS（完整）** | +514,844 | 122.9 | 4,309 | 0.7 |
-| no_skew | +793,439 | 14.1 | 231,549 | 10.9 |
-| naive（固定1tick） | +503,408 | 7.9 | 257,353 | 16.1 |
+| **AS（完整）** | +1,047,070 | 112.8 | 11,270 | 0.7 |
+| no_skew | +1,289,488 | 12.6 | 231,549 | 11.1 |
+| naive（固定1tick） | +1,094,312 | 7.6 | 286,343 | 16.1 |
 
-> AS 完整版以最低的库存风险和回撤实现最高风险调整收益。no_skew 在本 seed 盈利更高但回撤 23 万、Sharpe 仅 14，跨 seed 表现极不稳定（见参数扫描）；naive 以高库存博取类似总盈亏，风险敞口最大。
+> AS 完整版以最低的库存风险和回撤实现最高风险调整收益。no_skew 在本 seed 盈利更高但回撤 23 万、Sharpe 仅 13，跨 seed 表现极不稳定（见参数扫描）；naive 以高库存博取类似总盈亏，风险敞口最大。
 
 ### 成交渠道结构（最优参数 gamma=0.01, k=100）
 
