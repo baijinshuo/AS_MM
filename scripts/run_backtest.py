@@ -32,7 +32,9 @@ from as_mm.analytics import markouts  # noqa: E402
 from as_mm.config import preset_for  # noqa: E402
 from as_mm.plotting import (  # noqa: E402
     plot_daily_pnl,
+    plot_day_snapshot,
     plot_equity,
+    plot_quote_stats,
     plot_quote_window,
     plot_sweep,
 )
@@ -89,6 +91,87 @@ def save_fills(res, path):
             ])
 
 
+def save_samples(res, path):
+    """保存 10 秒粒度采样序列：双边报价 / 持仓 / 累计盈亏（供外部细查）。"""
+    sched = SessionSchedule()
+    from as_mm.config import TRADING_SECONDS_PER_DAY
+    tick = res.contract.tick_size
+    day_base = 0.0
+    cum = 0.0
+    cur_day = 0
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["日", "时间", "中间价", "我方买价", "我方卖价", "市场买价",
+                    "市场卖价", "半价差(tick)", "报价偏移(tick)", "持仓(手)",
+                    "日内累计盈亏(元)", "总累计盈亏(元)"])
+        for t, mid, bid, ask, bb, ba, inv, eq in zip(
+                res.sample_ts, res.sample_mid, res.sample_bid, res.sample_ask,
+                res.sample_bb, res.sample_ba, res.sample_inventory,
+                res.sample_equity):
+            if int(t) != cur_day:
+                cur_day = int(t)
+                day_base = cum
+            cum = eq
+            half = (ask - bid) / 2 / tick if bid == bid and ask == ask else ""
+            skew = (mid - (bid + ask) / 2) / tick if bid == bid and ask == ask else ""
+            ts = (t - cur_day) * TRADING_SECONDS_PER_DAY
+            w.writerow([
+                cur_day + 1, sched.wall_clock(ts), f"{mid:.4f}",
+                f"{bid:.4f}" if bid == bid else "", f"{ask:.4f}" if ask == ask else "",
+                f"{bb:.4f}", f"{ba:.4f}",
+                f"{half:.2f}" if half != "" else "", f"{skew:+.2f}" if skew != "" else "",
+                int(inv), f"{eq - day_base:.2f}", f"{eq:.2f}",
+            ])
+
+
+def print_daily_detail(res):
+    """逐日明细：盈亏 / 成交结构 / 费用 / 库存。"""
+    print(f"\n  {'日':>3}  {'PnL(元)':>12}  {'成交':>6}（{'买':>5}/{'卖':>5}）"
+          f"  {'费用(元)':>10}  {'库存末':>5}  {'库存峰':>5}")
+    for row in daily_table(res):
+        print(f"  {row['day']:>3}  {row['pnl']:>12,.0f}  {row['n_fills']:>6}"
+              f"（{row['n_buys']:>5}/{row['n_sells']:>5}）"
+              f"  {row['fees']:>10,.0f}  {row['end_inventory']:>5}"
+              f"  {row['max_abs_inventory']:>5}")
+
+
+def print_quote_excerpt(res, day=0, step=90, max_rows=12):
+    """摘录某日双边报价采样（每 step 个采样点取一行，step=90 即约 15 分钟）。"""
+    tick = res.contract.tick_size
+    sched = SessionSchedule()
+    from as_mm.config import TRADING_SECONDS_PER_DAY
+    rows = [(t, m, b, a, q, e) for t, m, b, a, q, e in zip(
+        res.sample_ts, res.sample_mid, res.sample_bid, res.sample_ask,
+        res.sample_inventory, res.sample_equity) if int(t) == day]
+    print(f"\n双边报价摘录（第 {day + 1} 日，10 秒粒度采样，每 15 分钟一行）：")
+    print(f"  {'时间':>8}  {'中间价':>9}  {'我方买价':>9}  {'我方卖价':>9}"
+          f"  {'半价差':>6}  {'偏移':>6}  {'持仓':>4}")
+    for i in range(0, len(rows), step):
+        if i // step >= max_rows:
+            break
+        t, m, b, a, q, _ = rows[i]
+        ts = (t - day) * TRADING_SECONDS_PER_DAY
+        half = (a - b) / 2 / tick
+        skew = (m - (b + a) / 2) / tick
+        print(f"  {sched.wall_clock(ts):>8}  {m:>9.4f}  {b:>9.4f}  {a:>9.4f}"
+              f"  {half:>5.1f}t  {skew:>+5.1f}t  {int(q):>4}")
+
+
+def print_fill_excerpt(res, day=0, n=8):
+    """打印某日前 n 笔成交明细（含渠道）。"""
+    sched = SessionSchedule()
+    fills = [f for f in res.fills if f.day == day][:n]
+    if not fills:
+        return
+    print(f"\n成交明细摘录（第 {day + 1} 日前 {len(fills)} 笔）：")
+    print(f"  {'时间':>8}  {'方向':>4}  {'价格':>9}  {'中间价':>9}"
+          f"  {'偏离(tick)':>8}  {'渠道':>10}")
+    for f in fills:
+        dev = (f.mid - f.price) / res.contract.tick_size
+        print(f"  {sched.wall_clock(f.ts):>8}  {'买' if f.side > 0 else '卖':>4}"
+              f"  {f.price:>9.4f}  {f.mid:>9.4f}  {dev:>+8.1f}  {f.rel:>10}")
+
+
 def print_metrics(metrics, contract):
     tick_val = contract.tick_value
     print(f"""
@@ -131,7 +214,7 @@ def print_benchmark_table(all_metrics, tick_val):
 def main():
     ap = argparse.ArgumentParser(description="AS 国债期货做市策略回测")
     ap.add_argument("--contract", default="T", choices=["TS", "TF", "T", "TL"])
-    ap.add_argument("--days", type=int, default=10)
+    ap.add_argument("--days", type=int, default=20)
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--gamma", type=float, default=None, help="有效风险厌恶 Gamma")
     ap.add_argument("--k", type=float, default=None, help="成交强度衰减系数")
@@ -161,14 +244,17 @@ def main():
                            MODE_AS, f"{contract.symbol}_as", outdir)
     print_metrics(metrics, contract)
     mo = markouts(res)
-    print("\n逐日明细：")
-    for row in daily_table(res):
-        print(f"  第 {row['day']:>2} 日  PnL {row['pnl']:>12,.0f} 元  "
-              f"成交 {row['n_fills']:>5} 笔  费用 {row['fees']:>8,.0f} 元")
+
+    print_daily_detail(res)
+    print_quote_excerpt(res, day=0)
+    print_fill_excerpt(res, day=0)
 
     plot_equity(res, os.path.join(outdir, "equity_inventory.png"))
     plot_daily_pnl(res, os.path.join(outdir, "daily_pnl.png"))
     plot_quote_window(res, os.path.join(outdir, "quote_window.png"))
+    plot_day_snapshot(res, os.path.join(outdir, "day_snapshot.png"), day=0)
+    plot_quote_stats(res, os.path.join(outdir, "quote_stats.png"))
+    save_samples(res, os.path.join(outdir, f"{contract.symbol}_as_samples.csv"))
 
     # ---------- 2) 成交强度校准 ----------
     print("\n[2/4] 成交强度校准（由主回测挂单记录估计 lambda(delta)=A*exp(-k*delta)）")

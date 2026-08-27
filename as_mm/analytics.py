@@ -135,15 +135,24 @@ def compute_metrics(res: BacktestResult) -> dict:
 
 
 def daily_table(res: BacktestResult) -> list[dict]:
-    """逐日明细（PnL / 成交数 / 费用）。"""
+    """逐日明细（PnL / 成交结构 / 费用 / 库存）。"""
     days = sorted({f.day for f in res.fills} | set(range(res.n_days)))
+    # 按日分组采样库存，取期末值与峰值
+    day_inv: dict[int, list[int]] = {}
+    for t, q in zip(res.sample_ts, res.sample_inventory):
+        day_inv.setdefault(int(t), []).append(q)
     out = []
     for d in days:
         day_fills = [f for f in res.fills if f.day == d]
+        invs = day_inv.get(d, [])
         out.append({
             "day": d + 1,
             "pnl": res.daily_pnl[d] if d < len(res.daily_pnl) else float("nan"),
             "n_fills": len(day_fills),
+            "n_buys": sum(1 for f in day_fills if f.side > 0),
+            "n_sells": sum(1 for f in day_fills if f.side < 0),
             "fees": sum(f.fee for f in day_fills),
+            "end_inventory": int(invs[-1]) if invs else 0,
+            "max_abs_inventory": int(max((abs(x) for x in invs), default=0)),
         })
     return out
